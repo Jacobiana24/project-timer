@@ -14,9 +14,7 @@ import json
 import math
 import os
 import sys
-import textwrap
 import tkinter as tk
-from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -58,11 +56,21 @@ TBL_TEXT = "#e0e0e0"
 TBL_TOTALS_BG = "#3a3a50"
 TBL_TOTALS_FG = "#ffffff"
 
+# Calendar popup colors
+CAL_BG = "#1e1e2e"
+CAL_HEADER_FG = "#e0e0e0"
+CAL_DOW_FG = "#888899"
+CAL_DAY_FG = "#e0e0e0"
+CAL_DAY_DISABLED = "#444455"
+CAL_DAY_HOVER = "#333348"
+CAL_DAY_SELECTED_BG = "#3b82f6"
+CAL_DAY_TODAY_FG = "#3b82f6"
+CAL_BORDER = "#444458"
+
 # ─── Utility Functions ────────────────────────────────────────────────────────
 
 
 def config_path() -> Path:
-    """Return path to config file next to the script/exe."""
     if getattr(sys, "frozen", False):
         base = Path(sys.executable).parent
     else:
@@ -93,7 +101,6 @@ def save_config(cfg: dict):
 
 
 def parse_iso(s) -> datetime | None:
-    """Parse ISO 8601 string (including Z suffix) to aware UTC datetime."""
     if not s:
         return None
     try:
@@ -107,7 +114,6 @@ def parse_iso(s) -> datetime | None:
 
 
 def format_hm(minutes: int | float) -> str:
-    """Format minutes as Xh Ym."""
     m = int(round(minutes))
     if m <= 0:
         return "-"
@@ -120,14 +126,12 @@ def format_hm(minutes: int | float) -> str:
 
 
 def format_hmm(minutes: int | float) -> str:
-    """Format minutes as H:MM."""
     m = int(round(minutes))
     h, rem = divmod(m, 60)
     return f"{h}:{rem:02d}"
 
 
 def format_hhmmss(total_seconds: float) -> str:
-    """Format seconds as H:MM:SS."""
     ts = max(0, int(total_seconds))
     h, rem = divmod(ts, 3600)
     m, s = divmod(rem, 60)
@@ -135,8 +139,6 @@ def format_hhmmss(total_seconds: float) -> str:
 
 
 def week_bounds_local(ref_date: datetime) -> tuple[datetime, datetime]:
-    """Return (monday 00:00, sunday 23:59:59.999999) in local time for the
-    week containing ref_date."""
     if ref_date.tzinfo:
         ref_date = ref_date.astimezone(tz=None).replace(tzinfo=None)
     monday = ref_date - timedelta(days=ref_date.weekday())
@@ -146,8 +148,6 @@ def week_bounds_local(ref_date: datetime) -> tuple[datetime, datetime]:
 
 
 def session_day_local(session: dict) -> datetime | None:
-    """Return the local-time date a session should be attributed to.
-    Uses end_time, falls back to start_time."""
     et = parse_iso(session.get("end_time"))
     if et:
         return et.astimezone(tz=None).replace(tzinfo=None)
@@ -158,7 +158,6 @@ def session_day_local(session: dict) -> datetime | None:
 
 
 def safe_write_frontmatter(filepath: Path, post: frontmatter.Post):
-    """Write frontmatter safely via tmp file + rename."""
     tmp = filepath.with_suffix(".tmp")
     content = frontmatter.dumps(post)
     with open(tmp, "w", encoding="utf-8") as f:
@@ -166,15 +165,14 @@ def safe_write_frontmatter(filepath: Path, post: frontmatter.Post):
     tmp.replace(filepath)
 
 
-# ─── Calendar Date Picker Widget ─────────────────────────────────────────────
+# ─── Calendar Date Picker ─────────────────────────────────────────────────────
+# Uses plain tk.Toplevel instead of CTkToplevel to avoid the known Windows bug
+# where CTkToplevel with overrideredirect(True) creates unkillable ghost windows.
 
 
 class CalendarPicker(ctk.CTkFrame):
-    """
-    A date picker widget with an entry field and a dropdown calendar popup.
-    Styled to match Obsidian's dark date picker. Only allows selecting Mondays
-    when mondays_only=True.
-    """
+    """Date picker with entry field and dropdown calendar popup.
+    Only allows selecting Mondays when mondays_only=True."""
 
     def __init__(self, master, mondays_only=True, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
@@ -187,7 +185,6 @@ class CalendarPicker(ctk.CTkFrame):
         self._view_year = self._selected_date.year
         self._view_month = self._selected_date.month
 
-        # Entry + calendar button
         self.date_entry = ctk.CTkEntry(self, width=120, justify="center")
         self.date_entry.pack(side="left", padx=(0, 4))
         self.date_entry.insert(0, self._selected_date.strftime("%d/%m/%Y"))
@@ -200,7 +197,6 @@ class CalendarPicker(ctk.CTkFrame):
         self.cal_btn.pack(side="left")
 
     def get_date(self) -> datetime | None:
-        """Parse and return the selected date, or None if invalid."""
         text = self.date_entry.get().strip()
         try:
             dt = datetime.strptime(text, "%d/%m/%Y")
@@ -218,14 +214,18 @@ class CalendarPicker(ctk.CTkFrame):
         self.date_entry.insert(0, dt.strftime("%d/%m/%Y"))
 
     def _toggle_popup(self):
-        if self._popup and self._popup.winfo_exists():
-            self._popup.destroy()
+        if self._popup is not None:
+            try:
+                if self._popup.winfo_exists():
+                    self._popup.destroy()
+            except Exception:
+                pass
             self._popup = None
             return
         self._show_popup()
 
     def _show_popup(self):
-        # Sync view to whatever is typed in the entry
+        # Sync view month to entry text
         text = self.date_entry.get().strip()
         try:
             dt = datetime.strptime(text, "%d/%m/%Y")
@@ -234,74 +234,101 @@ class CalendarPicker(ctk.CTkFrame):
         except ValueError:
             pass
 
-        self._popup = ctk.CTkToplevel(self)
+        # Use plain tk.Toplevel — avoids CTkToplevel ghost window bug on Windows
+        self._popup = tk.Toplevel(self)
         self._popup.overrideredirect(True)
+        self._popup.configure(bg=CAL_BG)
         self._popup.attributes("-topmost", True)
-        self._popup.configure(fg_color="#1e1e2e")
 
-        # Position below the entry widget
+        # Position below the entry
+        self.update_idletasks()
         x = self.winfo_rootx()
-        y = self.winfo_rooty() + self.winfo_height() + 4
+        y = self.winfo_rooty() + self.winfo_height() + 2
         self._popup.geometry(f"+{x}+{y}")
 
         self._build_calendar()
 
-        self._popup.bind("<FocusOut>", self._on_focus_out)
+        # Close when clicking anywhere outside the popup
+        self._popup.bind("<FocusOut>", self._schedule_close_check)
         self._popup.focus_set()
 
-    def _on_focus_out(self, event):
-        if self._popup and self._popup.winfo_exists():
-            self._popup.after(150, self._check_focus)
+    def _schedule_close_check(self, event=None):
+        if self._popup:
+            self._popup.after(200, self._close_if_lost_focus)
 
-    def _check_focus(self):
+    def _close_if_lost_focus(self):
         try:
-            if self._popup and self._popup.winfo_exists():
-                focused = self._popup.focus_get()
-                if focused is None or not str(focused).startswith(str(self._popup)):
-                    self._popup.destroy()
-                    self._popup = None
+            if not self._popup or not self._popup.winfo_exists():
+                return
+            # Check if focus is still within the popup
+            focused = self._popup.focus_get()
+            if focused is None:
+                self._close_popup()
+                return
+            # Walk up the widget hierarchy to see if focus is in popup
+            w = focused
+            while w is not None:
+                if w == self._popup:
+                    return  # Focus still inside popup
+                w = w.master
+            self._close_popup()
         except Exception:
-            pass
+            self._close_popup()
+
+    def _close_popup(self):
+        if self._popup:
+            try:
+                self._popup.destroy()
+            except Exception:
+                pass
+            self._popup = None
 
     def _build_calendar(self):
-        if not self._popup or not self._popup.winfo_exists():
+        if not self._popup:
             return
 
+        # Clear previous content
         for w in self._popup.winfo_children():
             w.destroy()
 
-        frame = ctk.CTkFrame(self._popup, fg_color="#1e1e2e", corner_radius=8)
-        frame.pack(padx=2, pady=2)
+        outer = tk.Frame(self._popup, bg=CAL_BORDER, padx=1, pady=1)
+        outer.pack()
+        frame = tk.Frame(outer, bg=CAL_BG, padx=8, pady=8)
+        frame.pack()
 
-        # ── Header: ‹ Month Year › ──
-        header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=8, pady=(8, 4))
+        # ── Header row: ‹  Month Year  › ──
+        header = tk.Frame(frame, bg=CAL_BG)
+        header.pack(fill="x", pady=(0, 6))
 
-        ctk.CTkButton(
-            header, text="‹", width=28, height=28,
-            fg_color="#333348", hover_color="#444458",
+        prev_btn = tk.Button(
+            header, text="‹", font=("Segoe UI", 14), width=2,
+            bg=CAL_BG, fg=CAL_HEADER_FG, activebackground=CAL_DAY_HOVER,
+            activeforeground=CAL_HEADER_FG, bd=0, relief="flat",
             command=self._prev_month,
-        ).pack(side="left")
+        )
+        prev_btn.pack(side="left")
 
         month_name = calendar.month_name[self._view_month]
-        ctk.CTkLabel(
+        tk.Label(
             header, text=f"{month_name} {self._view_year}",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=("Segoe UI", 11, "bold"), bg=CAL_BG, fg=CAL_HEADER_FG,
         ).pack(side="left", expand=True)
 
-        ctk.CTkButton(
-            header, text="›", width=28, height=28,
-            fg_color="#333348", hover_color="#444458",
+        next_btn = tk.Button(
+            header, text="›", font=("Segoe UI", 14), width=2,
+            bg=CAL_BG, fg=CAL_HEADER_FG, activebackground=CAL_DAY_HOVER,
+            activeforeground=CAL_HEADER_FG, bd=0, relief="flat",
             command=self._next_month,
-        ).pack(side="right")
+        )
+        next_btn.pack(side="right")
 
         # ── Day-of-week labels ──
-        dow_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        dow_frame.pack(fill="x", padx=8)
+        dow_frame = tk.Frame(frame, bg=CAL_BG)
+        dow_frame.pack(fill="x")
         for d in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]:
-            ctk.CTkLabel(
-                dow_frame, text=d, width=36,
-                font=ctk.CTkFont(size=11), text_color="#888899",
+            tk.Label(
+                dow_frame, text=d, width=4, font=("Segoe UI", 9),
+                bg=CAL_BG, fg=CAL_DOW_FG,
             ).pack(side="left", padx=1)
 
         # ── Day grid ──
@@ -310,71 +337,68 @@ class CalendarPicker(ctk.CTkFrame):
         today = datetime.now().date()
 
         for week in weeks:
-            row_frame = ctk.CTkFrame(frame, fg_color="transparent")
-            row_frame.pack(fill="x", padx=8)
+            row = tk.Frame(frame, bg=CAL_BG)
+            row.pack(fill="x")
 
             for day_num in week:
                 if day_num == 0:
-                    ctk.CTkLabel(row_frame, text="", width=36).pack(side="left", padx=1)
+                    tk.Label(row, text="", width=4, bg=CAL_BG).pack(side="left", padx=1, pady=1)
                     continue
 
                 dt = datetime(self._view_year, self._view_month, day_num)
                 is_monday = dt.weekday() == 0
                 is_today = dt.date() == today
-                is_selected = (
-                    self._selected_date
-                    and dt.date() == self._selected_date.date()
-                )
-
+                is_selected = self._selected_date and dt.date() == self._selected_date.date()
                 selectable = (not self.mondays_only) or is_monday
 
                 if is_selected:
-                    fg = "#3b82f6"
-                    hover = "#5299f7"
-                    text_color = "white"
+                    bg = CAL_DAY_SELECTED_BG
+                    fg = "#ffffff"
                 elif is_today:
-                    fg = "#333348"
-                    hover = "#444458"
-                    text_color = "#3b82f6"
+                    bg = CAL_BG
+                    fg = CAL_DAY_TODAY_FG
                 elif selectable:
-                    fg = "transparent"
-                    hover = "#333348"
-                    text_color = "#e0e0e0"
+                    bg = CAL_BG
+                    fg = CAL_DAY_FG
                 else:
-                    fg = "transparent"
-                    hover = "transparent"
-                    text_color = "#555566"
+                    bg = CAL_BG
+                    fg = CAL_DAY_DISABLED
 
-                btn = ctk.CTkButton(
-                    row_frame,
-                    text=str(day_num),
-                    width=36, height=30,
-                    font=ctk.CTkFont(size=12),
-                    fg_color=fg,
-                    hover_color=hover,
-                    text_color=text_color,
-                    corner_radius=6,
-                    command=(lambda d=dt: self._pick_date(d)) if selectable else None,
-                )
-                if not selectable:
-                    btn.configure(state="disabled")
-                btn.pack(side="left", padx=1, pady=1)
+                if selectable:
+                    btn = tk.Button(
+                        row, text=str(day_num), width=4,
+                        font=("Segoe UI", 9, "bold" if is_selected else "normal"),
+                        bg=bg, fg=fg, activebackground=CAL_DAY_HOVER,
+                        activeforeground="#ffffff", bd=0, relief="flat",
+                        command=lambda d=dt: self._pick_date(d),
+                    )
+                    # Hover effect
+                    if not is_selected:
+                        btn.bind("<Enter>", lambda e, b=btn: b.config(bg=CAL_DAY_HOVER))
+                        btn.bind("<Leave>", lambda e, b=btn, c=bg: b.config(bg=c))
+                    btn.pack(side="left", padx=1, pady=1)
+                else:
+                    lbl = tk.Label(
+                        row, text=str(day_num), width=4,
+                        font=("Segoe UI", 9), bg=bg, fg=fg,
+                    )
+                    lbl.pack(side="left", padx=1, pady=1)
 
         # ── Bottom: Clear / Today ──
-        bottom = ctk.CTkFrame(frame, fg_color="transparent")
-        bottom.pack(fill="x", padx=8, pady=(4, 8))
+        bottom = tk.Frame(frame, bg=CAL_BG)
+        bottom.pack(fill="x", pady=(6, 0))
 
-        ctk.CTkButton(
-            bottom, text="Clear", width=60, height=26,
-            fg_color="transparent", hover_color="#333348",
-            text_color="#888899", font=ctk.CTkFont(size=11),
+        tk.Button(
+            bottom, text="Clear", font=("Segoe UI", 9),
+            bg=CAL_BG, fg=CAL_DOW_FG, activebackground=CAL_DAY_HOVER,
+            activeforeground="#ffffff", bd=0, relief="flat",
             command=self._clear_date,
         ).pack(side="left")
 
-        ctk.CTkButton(
-            bottom, text="Today", width=60, height=26,
-            fg_color="transparent", hover_color="#333348",
-            text_color="#3b82f6", font=ctk.CTkFont(size=11),
+        tk.Button(
+            bottom, text="Today", font=("Segoe UI", 9),
+            bg=CAL_BG, fg=CAL_DAY_TODAY_FG, activebackground=CAL_DAY_HOVER,
+            activeforeground="#ffffff", bd=0, relief="flat",
             command=self._go_today,
         ).pack(side="right")
 
@@ -398,15 +422,11 @@ class CalendarPicker(ctk.CTkFrame):
         self._selected_date = dt
         self.date_entry.delete(0, "end")
         self.date_entry.insert(0, dt.strftime("%d/%m/%Y"))
-        if self._popup and self._popup.winfo_exists():
-            self._popup.destroy()
-            self._popup = None
+        self._close_popup()
 
     def _clear_date(self):
         self.date_entry.delete(0, "end")
-        if self._popup and self._popup.winfo_exists():
-            self._popup.destroy()
-            self._popup = None
+        self._close_popup()
 
     def _go_today(self):
         today = datetime.now()
@@ -419,8 +439,7 @@ class CalendarPicker(ctk.CTkFrame):
 
 
 class DarkTable(ctk.CTkScrollableFrame):
-    """A dark-themed table widget built entirely with CTk labels.
-    No ttk.Treeview — no white flash artifacts."""
+    """Dark-themed table built with CTk labels. No ttk Treeview."""
 
     def __init__(self, master, headers: list[str], col_widths: list[int] | None = None,
                  col_anchors: list[str] | None = None, **kwargs):
@@ -431,7 +450,6 @@ class DarkTable(ctk.CTkScrollableFrame):
         self.col_anchors = col_anchors or ["w"] + ["center"] * (self.col_count - 1)
         self._row_count = 0
 
-        # Header row
         hdr_frame = ctk.CTkFrame(self, fg_color=TBL_HEADER_BG, corner_radius=0)
         hdr_frame.pack(fill="x", padx=0, pady=(0, 1))
         for i, h in enumerate(headers):
@@ -463,8 +481,6 @@ class DarkTable(ctk.CTkScrollableFrame):
 
 
 class ProjectNote:
-    """Represents a single Obsidian project note."""
-
     def __init__(self, filepath: Path):
         self.filepath = filepath
         self.name = filepath.stem
@@ -512,7 +528,6 @@ class ProjectNote:
         return []
 
     def minutes_in_range(self, start: datetime, end: datetime) -> float:
-        """Sum session minutes within a local-time range."""
         total = 0.0
         for sess in self.sessions:
             dt = session_day_local(sess)
@@ -525,7 +540,6 @@ class ProjectNote:
         return total
 
     def minutes_per_day(self, monday: datetime) -> list[float]:
-        """Return [Mon, Tue, Wed, Thu, Fri] minute totals for the week starting monday."""
         days = [0.0] * 5
         for sess in self.sessions:
             dt = session_day_local(sess)
@@ -579,7 +593,6 @@ class ProjectNote:
 
 
 def scan_projects(vault_path: str) -> list[ProjectNote]:
-    """Scan vault path for all Project class markdown notes."""
     projects = []
     vp = Path(vault_path)
     if not vp.exists():
@@ -598,7 +611,8 @@ def scan_projects(vault_path: str) -> list[ProjectNote]:
 
 
 def calculate_adjusted_bookings(
-    projects: list[ProjectNote], monday: datetime,
+    projects: list[ProjectNote],
+    monday: datetime,
     target_minutes: int = 2250,
 ) -> dict:
     """
@@ -610,11 +624,7 @@ def calculate_adjusted_bookings(
         target_minutes: total weekly target in minutes (default 2250 = 37.5h)
 
     Returns dict with keys:
-        rows: list of dicts {name, actual_days, actual_total, final_days, final_total}
-        excluded: list of project names excluded (<15 min)
-        actual_grand: total actual minutes
-        multiplier: scaling multiplier
-        target_minutes: the target used
+        rows, excluded, actual_grand, multiplier, target_minutes
     """
     target_daily = target_minutes // 5
 
@@ -648,9 +658,6 @@ def calculate_adjusted_bookings(
         r["adj_total"] = r["total"] * multiplier
 
     # ── Step 3: Round to 15 mins ──
-    # Round each adjusted day value: round(v / 15) * 15
-    # Round adjusted weekly total independently
-    # If sum of rounded days != rounded total, add difference to highest-value day
     for r in filtered:
         r["final_days"] = [round(v / 15) * 15 for v in r["adj_days"]]
         r["final_total"] = round(r["adj_total"] / 15) * 15
@@ -662,8 +669,6 @@ def calculate_adjusted_bookings(
             r["final_days"][max_idx] += diff
 
     # ── Step 4: Enforce target total ──
-    # Sum all finalTotal values. If != target, find project with highest total
-    # and adjust its worked days evenly in 15-min increments.
     grand = sum(r["final_total"] for r in filtered)
     if grand != target_minutes:
         diff = target_minutes - grand
@@ -682,9 +687,7 @@ def calculate_adjusted_bookings(
                     top["final_days"][best_idx] += remainder * 15
                 top["final_total"] = sum(top["final_days"])
 
-    # ── Step 5: Balance days to target_daily mins each ──
-    # For each Mon-Fri, if daily sum != target_daily, add/subtract 15 from largest project.
-    # Repeat up to 20 iterations.
+    # ── Step 5: Balance days to target_daily each ──
     for _iteration in range(20):
         balanced = True
         for day_idx in range(5):
@@ -699,7 +702,6 @@ def calculate_adjusted_bookings(
         if balanced:
             break
 
-    # Build output rows sorted by final_total descending
     rows = sorted(filtered, key=lambda r: r["final_total"], reverse=True)
     result_rows = []
     for r in rows:
@@ -749,18 +751,15 @@ class App(ctk.CTk):
     # ── UI Construction ───────────────────────────────────────────────────
 
     def _build_ui(self):
-        # Top bar with settings
         top = ctk.CTkFrame(self, height=36, fg_color="transparent")
         top.pack(fill="x", padx=8, pady=(4, 0))
 
-        settings_btn = ctk.CTkButton(
+        ctk.CTkButton(
             top, text="⚙ Settings", width=100, height=28,
             command=self._open_settings,
             fg_color="#555555", hover_color="#666666"
-        )
-        settings_btn.pack(side="right")
+        ).pack(side="right")
 
-        # Tab view
         self.tabview = ctk.CTkTabview(self)
         self.tabview.pack(fill="both", expand=True, padx=8, pady=4)
 
@@ -799,7 +798,6 @@ class App(ctk.CTk):
 
         self.timer_scroll = ctk.CTkScrollableFrame(self.tab_timer)
         self.timer_scroll.pack(fill="both", expand=True, padx=4, pady=4)
-
         self.timer_buttons: dict[str, ctk.CTkButton] = {}
 
     def _build_weekly_tab(self):
@@ -809,7 +807,6 @@ class App(ctk.CTk):
         ctk.CTkLabel(ctrl, text="Week start:").pack(side="left", padx=(0, 6))
         self.weekly_cal = CalendarPicker(ctrl, mondays_only=True)
         self.weekly_cal.pack(side="left", padx=(0, 8))
-
         ctk.CTkButton(ctrl, text="Load Week", width=100, command=self._load_weekly).pack(side="left")
 
         self.weekly_table_frame = ctk.CTkFrame(self.tab_weekly, fg_color="transparent")
@@ -882,7 +879,6 @@ class App(ctk.CTk):
         self._schedule_auto_refresh()
 
     def _detect_running_timer(self):
-        """On startup/refresh, find any running timers. Handle corruption."""
         running = [p for p in self.projects if p.timer_running]
 
         if len(running) > 1:
@@ -945,7 +941,6 @@ class App(ctk.CTk):
 
         now = datetime.now()
         mon_start, sun_end = week_bounds_local(now)
-
         active = [p for p in self.projects if p.status == "Active"]
 
         groups: dict[str, list[ProjectNote]] = {}
@@ -965,8 +960,7 @@ class App(ctk.CTk):
 
             ctk.CTkLabel(
                 self.timer_scroll, text=group_label,
-                font=ctk.CTkFont(size=14, weight="bold"),
-                anchor="w"
+                font=ctk.CTkFont(size=14, weight="bold"), anchor="w"
             ).pack(fill="x", padx=4, pady=(10, 4))
 
             container = ctk.CTkFrame(self.timer_scroll, fg_color="transparent")
@@ -983,12 +977,10 @@ class App(ctk.CTk):
 
                 is_running = (self.running_project and p.name == self.running_project.name)
 
-                btn_text = f"{p.name}\n{format_hm(week_mins)} this week"
                 btn = ctk.CTkButton(
                     container,
-                    text=btn_text,
-                    width=170,
-                    height=52,
+                    text=f"{p.name}\n{format_hm(week_mins)} this week",
+                    width=170, height=52,
                     font=ctk.CTkFont(size=12),
                     fg_color=COLOR_RUNNING if is_running else COLOR_IDLE,
                     hover_color="#c0392b" if is_running else "#218838",
@@ -1008,11 +1000,9 @@ class App(ctk.CTk):
                 if self.running_project:
                     self.running_project.stop_timer()
                     self.running_project = None
-
                 project.load()
                 project.start_timer()
                 self.running_project = project
-
         except Exception as e:
             messagebox.showerror("File Write Error", f"Failed to write {project.filepath.name}:\n{e}")
             return
@@ -1043,10 +1033,10 @@ class App(ctk.CTk):
             week_mins = self.running_project.minutes_in_range(mon_start, sun_end)
             ss = self.running_project.session_start
             if ss:
-                elapsed = (datetime.now(timezone.utc) - ss).total_seconds() / 60
-                week_mins += elapsed
-            btn = self.timer_buttons[self.running_project.name]
-            btn.configure(text=f"{self.running_project.name}\n{format_hm(week_mins)} this week")
+                week_mins += (datetime.now(timezone.utc) - ss).total_seconds() / 60
+            self.timer_buttons[self.running_project.name].configure(
+                text=f"{self.running_project.name}\n{format_hm(week_mins)} this week"
+            )
 
     def _status_bar_click(self, event=None):
         if self.running_project:
@@ -1063,20 +1053,16 @@ class App(ctk.CTk):
         for w in self.weekly_table_frame.winfo_children():
             w.destroy()
 
-        mon_start = monday.replace(hour=0, minute=0, second=0, microsecond=0)
-
         day_headers = []
         for i in range(5):
             d = monday + timedelta(days=i)
             day_headers.append(f"{DAYS_OF_WEEK[i]} {d.strftime('%d/%m')}")
 
-        headers = ["Project"] + day_headers + ["Week Total"]
-        col_widths = [200] + [110] * 5 + [110]
-        col_anchors = ["w"] + ["center"] * 6
-
         table = DarkTable(
-            self.weekly_table_frame, headers=headers,
-            col_widths=col_widths, col_anchors=col_anchors,
+            self.weekly_table_frame,
+            headers=["Project"] + day_headers + ["Week Total"],
+            col_widths=[200] + [110] * 5 + [110],
+            col_anchors=["w"] + ["center"] * 6,
         )
         table.pack(fill="both", expand=True)
 
@@ -1115,7 +1101,6 @@ class App(ctk.CTk):
             messagebox.showerror("Invalid Date", "Please select a valid Monday using the calendar.")
             return
 
-        # Parse target hours from the entry field
         try:
             target_hours = float(self.target_entry.get().strip())
             if target_hours <= 0:
@@ -1137,7 +1122,6 @@ class App(ctk.CTk):
             ).pack(pady=20)
             return
 
-        # Summary line
         actual_hmm = format_hmm(result["actual_grand"])
         target_hmm = format_hmm(target_minutes)
         summary = f"Actual: {actual_hmm} → Target: {target_hmm} (Multiplier: {result['multiplier']:.6f})"
@@ -1158,13 +1142,11 @@ class App(ctk.CTk):
             d = monday + timedelta(days=i)
             day_headers.append(f"{DAYS_OF_WEEK[i]} {d.strftime('%d/%m')}")
 
-        headers = ["Project"] + day_headers + ["Week Total"]
-        col_widths = [200] + [110] * 5 + [110]
-        col_anchors = ["w"] + ["center"] * 6
-
         table = DarkTable(
-            self.adj_output_frame, headers=headers,
-            col_widths=col_widths, col_anchors=col_anchors,
+            self.adj_output_frame,
+            headers=["Project"] + day_headers + ["Week Total"],
+            col_widths=[200] + [110] * 5 + [110],
+            col_anchors=["w"] + ["center"] * 6,
         )
         table.pack(fill="both", expand=True)
 
@@ -1209,7 +1191,6 @@ class App(ctk.CTk):
             self.calc_result.configure(text="Invalid end time format.", text_color="#ff6b6b")
             self.calc_detail.configure(text="")
             return
-
         if end <= start:
             self.calc_result.configure(text="End time must be after start time.", text_color="#ff6b6b")
             self.calc_detail.configure(text="")
