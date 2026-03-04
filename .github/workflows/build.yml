@@ -24,7 +24,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build exe
-        run: pyinstaller --onefile --windowed --name "ProjectTimer" project_timer.py
+        run: pyinstaller --onefile --windowed --name "ProjectTimer" --icon "clock.ico" project_timer.py
 
       - name: Upload exe
         uses: actions/upload-artifact@v4
