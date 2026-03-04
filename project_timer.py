@@ -438,8 +438,9 @@ class CalendarPicker(ctk.CTkFrame):
 # ─── Dark Table Widget ────────────────────────────────────────────────────────
 
 
-class DarkTable(ctk.CTkScrollableFrame):
-    """Dark-themed table built with CTk labels. No ttk Treeview."""
+class DarkTable(ctk.CTkFrame):
+    """Dark-themed table with both vertical and horizontal scrolling.
+    Built with tk.Canvas + CTk labels. No ttk Treeview."""
 
     def __init__(self, master, headers: list[str], col_widths: list[int] | None = None,
                  col_anchors: list[str] | None = None, **kwargs):
@@ -449,8 +450,31 @@ class DarkTable(ctk.CTkScrollableFrame):
         self.col_widths = col_widths or [120] * self.col_count
         self.col_anchors = col_anchors or ["w"] + ["center"] * (self.col_count - 1)
         self._row_count = 0
+        self._total_width = sum(self.col_widths) + self.col_count * 8 + 20
 
-        hdr_frame = ctk.CTkFrame(self, fg_color=TBL_HEADER_BG, corner_radius=0)
+        # Canvas + scrollbars
+        self._canvas = tk.Canvas(self, bg=TBL_BG, highlightthickness=0)
+        self._v_scroll = ctk.CTkScrollbar(self, command=self._canvas.yview)
+        self._h_scroll = ctk.CTkScrollbar(self, orientation="horizontal", command=self._canvas.xview)
+        self._canvas.configure(yscrollcommand=self._v_scroll.set, xscrollcommand=self._h_scroll.set)
+
+        self._h_scroll.pack(side="bottom", fill="x")
+        self._v_scroll.pack(side="right", fill="y")
+        self._canvas.pack(side="left", fill="both", expand=True)
+
+        # Inner frame inside canvas
+        self._inner = ctk.CTkFrame(self._canvas, fg_color=TBL_BG)
+        self._canvas_window = self._canvas.create_window((0, 0), window=self._inner, anchor="nw")
+
+        self._inner.bind("<Configure>", self._on_inner_configure)
+        self._canvas.bind("<Configure>", self._on_canvas_configure)
+
+        # Mouse wheel scrolling
+        self._canvas.bind("<Enter>", self._bind_mousewheel)
+        self._canvas.bind("<Leave>", self._unbind_mousewheel)
+
+        # Header row
+        hdr_frame = ctk.CTkFrame(self._inner, fg_color=TBL_HEADER_BG, corner_radius=0)
         hdr_frame.pack(fill="x", padx=0, pady=(0, 1))
         for i, h in enumerate(headers):
             ctk.CTkLabel(
@@ -459,12 +483,35 @@ class DarkTable(ctk.CTkScrollableFrame):
                 text_color=TBL_HEADER_FG, anchor=self.col_anchors[i],
             ).pack(side="left", padx=4, pady=4)
 
+    def _on_inner_configure(self, event=None):
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event=None):
+        # Ensure inner frame is at least as wide as content
+        canvas_width = event.width if event else self._canvas.winfo_width()
+        min_width = max(canvas_width, self._total_width)
+        self._canvas.itemconfig(self._canvas_window, width=min_width)
+
+    def _bind_mousewheel(self, event=None):
+        self._canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self._canvas.bind_all("<Shift-MouseWheel>", self._on_shift_mousewheel)
+
+    def _unbind_mousewheel(self, event=None):
+        self._canvas.unbind_all("<MouseWheel>")
+        self._canvas.unbind_all("<Shift-MouseWheel>")
+
+    def _on_mousewheel(self, event):
+        self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _on_shift_mousewheel(self, event):
+        self._canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+
     def add_row(self, values: list[str], is_totals: bool = False):
         bg = TBL_TOTALS_BG if is_totals else (TBL_ROW_EVEN if self._row_count % 2 == 0 else TBL_ROW_ODD)
         fg = TBL_TOTALS_FG if is_totals else TBL_TEXT
         weight = "bold" if is_totals else "normal"
 
-        row_frame = ctk.CTkFrame(self, fg_color=bg, corner_radius=0)
+        row_frame = ctk.CTkFrame(self._inner, fg_color=bg, corner_radius=0)
         row_frame.pack(fill="x", padx=0, pady=0)
 
         for i, val in enumerate(values):
@@ -796,8 +843,35 @@ class App(ctk.CTk):
             fg_color="#555555", hover_color="#666666"
         ).pack(side="left")
 
-        self.timer_scroll = ctk.CTkScrollableFrame(self.tab_timer)
-        self.timer_scroll.pack(fill="both", expand=True, padx=4, pady=4)
+        # Dual-scroll frame for timer buttons
+        timer_outer = ctk.CTkFrame(self.tab_timer, fg_color="transparent")
+        timer_outer.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self._timer_canvas = tk.Canvas(timer_outer, bg="#2b2b2b", highlightthickness=0)
+        timer_v = ctk.CTkScrollbar(timer_outer, command=self._timer_canvas.yview)
+        timer_h = ctk.CTkScrollbar(timer_outer, orientation="horizontal", command=self._timer_canvas.xview)
+        self._timer_canvas.configure(yscrollcommand=timer_v.set, xscrollcommand=timer_h.set)
+
+        timer_h.pack(side="bottom", fill="x")
+        timer_v.pack(side="right", fill="y")
+        self._timer_canvas.pack(side="left", fill="both", expand=True)
+
+        self.timer_scroll = ctk.CTkFrame(self._timer_canvas, fg_color="transparent")
+        self._timer_canvas_window = self._timer_canvas.create_window((0, 0), window=self.timer_scroll, anchor="nw")
+
+        self.timer_scroll.bind("<Configure>", lambda e: self._timer_canvas.configure(
+            scrollregion=self._timer_canvas.bbox("all")
+        ))
+        self._timer_canvas.bind("<Configure>", self._on_timer_canvas_configure)
+        self._timer_canvas.bind("<Enter>", lambda e: (
+            self._timer_canvas.bind_all("<MouseWheel>", lambda ev: self._timer_canvas.yview_scroll(int(-1 * (ev.delta / 120)), "units")),
+            self._timer_canvas.bind_all("<Shift-MouseWheel>", lambda ev: self._timer_canvas.xview_scroll(int(-1 * (ev.delta / 120)), "units")),
+        ))
+        self._timer_canvas.bind("<Leave>", lambda e: (
+            self._timer_canvas.unbind_all("<MouseWheel>"),
+            self._timer_canvas.unbind_all("<Shift-MouseWheel>"),
+        ))
+
         self.timer_buttons: dict[str, ctk.CTkButton] = {}
 
     def _build_weekly_tab(self):
@@ -934,6 +1008,10 @@ class App(ctk.CTk):
 
     # ── Timer Tab ─────────────────────────────────────────────────────────
 
+    def _on_timer_canvas_configure(self, event=None):
+        canvas_width = event.width if event else self._timer_canvas.winfo_width()
+        self._timer_canvas.itemconfig(self._timer_canvas_window, width=canvas_width)
+
     def _populate_timer_buttons(self):
         for w in self.timer_scroll.winfo_children():
             w.destroy()
@@ -980,15 +1058,15 @@ class App(ctk.CTk):
                 btn = ctk.CTkButton(
                     container,
                     text=f"{p.name}\n{format_hm(week_mins)} this week",
-                    width=170, height=52,
-                    font=ctk.CTkFont(size=12),
+                    width=85, height=26,
+                    font=ctk.CTkFont(size=9),
                     fg_color=COLOR_RUNNING if is_running else COLOR_IDLE,
                     hover_color="#c0392b" if is_running else "#218838",
                     border_width=2 if is_running else 0,
                     border_color="#ff6b6b" if is_running else None,
                     command=lambda proj=p: self._toggle_timer(proj),
                 )
-                btn.pack(side="left", padx=3, pady=3)
+                btn.pack(side="left", padx=2, pady=2)
                 self.timer_buttons[p.name] = btn
 
     def _toggle_timer(self, project: ProjectNote):
