@@ -515,11 +515,22 @@ class DarkTable(ctk.CTkFrame):
         row_frame.pack(fill="x", padx=0, pady=0)
 
         for i, val in enumerate(values):
-            ctk.CTkLabel(
-                row_frame, text=val, width=self.col_widths[i],
-                font=ctk.CTkFont(size=11, weight=weight),
-                text_color=fg, anchor=self.col_anchors[i],
-            ).pack(side="left", padx=4, pady=3)
+            if i == 0:
+                # Project name column — use tk.Label with wraplength for long names
+                lbl = tk.Label(
+                    row_frame, text=val, width=0,
+                    font=("Segoe UI", 10 if not is_totals else 10, weight),
+                    bg=bg, fg=fg, anchor="w", justify="left",
+                    wraplength=self.col_widths[i],
+                )
+                lbl.pack(side="left", padx=4, pady=3, ipadx=0)
+                lbl.configure(width=self.col_widths[i] // 7)  # approx char width
+            else:
+                ctk.CTkLabel(
+                    row_frame, text=val, width=self.col_widths[i],
+                    font=ctk.CTkFont(size=11, weight=weight),
+                    text_color=fg, anchor=self.col_anchors[i],
+                ).pack(side="left", padx=4, pady=3)
 
         self._row_count += 1
 
