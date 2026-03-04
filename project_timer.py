@@ -9,10 +9,13 @@ Compatible with existing Obsidian DataviewJS queries — only modifies fields
 that the JS already reads.
 """
 
+import base64
 import calendar
+import io
 import json
 import math
 import os
+import struct
 import sys
 import tkinter as tk
 from datetime import datetime, timedelta, timezone
@@ -22,6 +25,63 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import frontmatter
 from dateutil import parser as dtparser
+
+
+def _generate_clock_ico() -> bytes:
+    """Generate a minimal 16x16 clock icon as .ico bytes.
+    Draws a circle with hour/minute hands on a transparent background."""
+    size = 16
+    pixels = bytearray(size * size * 4)  # BGRA
+
+    cx, cy, r = 7.5, 7.5, 6.5
+
+    for y in range(size):
+        for x in range(size):
+            off = (y * size + x) * 4
+            dx, dy = x - cx, y - cy
+            dist = math.sqrt(dx * dx + dy * dy)
+
+            if abs(dist - r) < 1.2:
+                # Circle outline — white
+                alpha = max(0, min(255, int(255 * (1.2 - abs(dist - r)))))
+                pixels[off:off + 4] = bytes([255, 255, 255, alpha])  # BGRA
+            elif dist < r - 0.5:
+                # Inside — dark fill
+                pixels[off:off + 4] = bytes([60, 50, 40, 220])  # BGRA
+            else:
+                pixels[off:off + 4] = bytes([0, 0, 0, 0])
+
+    # Draw clock hands (minute hand pointing to 12, hour hand to 2)
+    import math as m
+    hands = [
+        (cx, cy, cx, cy - 5, 255),       # minute hand — straight up
+        (cx, cy, cx + 3, cy - 3, 200),   # hour hand — ~2 o'clock
+    ]
+    for x0, y0, x1, y1, brightness in hands:
+        steps = 20
+        for t in range(steps + 1):
+            px = x0 + (x1 - x0) * t / steps
+            py = y0 + (y1 - y0) * t / steps
+            ix, iy = int(round(px)), int(round(py))
+            if 0 <= ix < size and 0 <= iy < size:
+                off = (iy * size + ix) * 4
+                pixels[off:off + 4] = bytes([brightness, brightness, brightness, 255])
+
+    # Build .ico file
+    bmp_data = bytes(pixels)
+    # ICO header
+    ico = bytearray()
+    ico += struct.pack('<HHH', 0, 1, 1)  # reserved, type=icon, count=1
+    # Directory entry
+    bmp_size = 40 + len(bmp_data)
+    ico += struct.pack('<BBBBHHII', size, size, 0, 0, 1, 32, bmp_size, 22)
+    # BITMAPINFOHEADER
+    ico += struct.pack('<IiiHHIIiiII', 40, size, size * 2, 1, 32, 0, len(bmp_data), 0, 0, 0, 0)
+    # Pixel data — ICO BMPs are stored bottom-up
+    for row in range(size - 1, -1, -1):
+        ico += bmp_data[row * size * 4:(row + 1) * size * 4]
+
+    return bytes(ico)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -796,6 +856,17 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
+        # Set clock icon
+        try:
+            ico_data = _generate_clock_ico()
+            import tempfile
+            ico_path = Path(tempfile.gettempdir()) / "ptt_clock.ico"
+            with open(ico_path, "wb") as f:
+                f.write(ico_data)
+            self.iconbitmap(str(ico_path))
+        except Exception:
+            pass  # Fall back to default icon
+
         self.projects: list[ProjectNote] = []
         self.running_project: ProjectNote | None = None
         self._timer_after_id = None
@@ -809,17 +880,11 @@ class App(ctk.CTk):
     # ── UI Construction ───────────────────────────────────────────────────
 
     def _build_ui(self):
-        top = ctk.CTkFrame(self, height=36, fg_color="transparent")
-        top.pack(fill="x", padx=8, pady=(4, 0))
-
-        ctk.CTkButton(
-            top, text="⚙ Settings", width=100, height=28,
-            command=self._open_settings,
-            fg_color="#555555", hover_color="#666666"
-        ).pack(side="right")
-
-        self.tabview = ctk.CTkTabview(self)
-        self.tabview.pack(fill="both", expand=True, padx=8, pady=4)
+        # Tab view — tight padding
+        self.tabview = ctk.CTkTabview(self, height=28)
+        self.tabview.pack(fill="both", expand=True, padx=4, pady=(0, 0))
+        # Reduce internal tab padding
+        self.tabview._segmented_button.configure(font=ctk.CTkFont(size=11))
 
         self.tab_timer = self.tabview.add("Timer")
         self.tab_weekly = self.tabview.add("Weekly View")
@@ -831,29 +896,36 @@ class App(ctk.CTk):
         self._build_adjusted_tab()
         self._build_calc_tab()
 
-        # Status bar
-        self.status_frame = ctk.CTkFrame(self, height=32, corner_radius=0, fg_color="#1a1a2e")
+        # Compact status bar
+        self.status_frame = ctk.CTkFrame(self, height=24, corner_radius=0, fg_color="#1a1a2e")
         self.status_frame.pack(fill="x", side="bottom")
         self.status_frame.pack_propagate(False)
 
         self.status_label = ctk.CTkLabel(
             self.status_frame, text="No timer running",
-            font=ctk.CTkFont(size=13), anchor="w"
+            font=ctk.CTkFont(size=11), anchor="w"
         )
-        self.status_label.pack(fill="x", padx=12, pady=4)
+        self.status_label.pack(fill="x", padx=8, pady=2)
         self.status_frame.bind("<Button-1>", self._status_bar_click)
         self.status_label.bind("<Button-1>", self._status_bar_click)
 
     def _build_timer_tab(self):
         ctrl = ctk.CTkFrame(self.tab_timer, fg_color="transparent")
-        ctrl.pack(fill="x", padx=2, pady=2)
+        ctrl.pack(fill="x", padx=2, pady=(0, 2))
 
         ctk.CTkButton(
-            ctrl, text="🔄 Refresh", width=70, height=22,
+            ctrl, text="🔄", width=28, height=22,
             font=ctk.CTkFont(size=9),
             command=self._refresh_projects,
             fg_color="#555555", hover_color="#666666"
         ).pack(side="left")
+
+        ctk.CTkButton(
+            ctrl, text="⚙", width=28, height=22,
+            font=ctk.CTkFont(size=9),
+            command=self._open_settings,
+            fg_color="#555555", hover_color="#666666"
+        ).pack(side="right")
 
         # Dual-scroll frame for timer buttons
         timer_outer = ctk.CTkFrame(self.tab_timer, fg_color="transparent")
