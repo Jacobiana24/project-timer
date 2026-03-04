@@ -28,8 +28,8 @@ from dateutil import parser as dtparser
 CONFIG_FILE = "timer_config.json"
 DEFAULT_CONFIG = {
     "vault_path": r"C:\Users\jacob.hand\Documents\My Brain\Work\Projects",
-    "window_width": 1100,
-    "window_height": 700,
+    "window_width": 600,
+    "window_height": 400,
     "window_x": 100,
     "window_y": 100,
 }
@@ -835,10 +835,11 @@ class App(ctk.CTk):
 
     def _build_timer_tab(self):
         ctrl = ctk.CTkFrame(self.tab_timer, fg_color="transparent")
-        ctrl.pack(fill="x", padx=4, pady=4)
+        ctrl.pack(fill="x", padx=2, pady=2)
 
         ctk.CTkButton(
-            ctrl, text="🔄 Refresh", width=100, height=28,
+            ctrl, text="🔄 Refresh", width=70, height=22,
+            font=ctk.CTkFont(size=9),
             command=self._refresh_projects,
             fg_color="#555555", hover_color="#666666"
         ).pack(side="left")
@@ -1010,7 +1011,8 @@ class App(ctk.CTk):
 
     def _on_timer_canvas_configure(self, event=None):
         canvas_width = event.width if event else self._timer_canvas.winfo_width()
-        self._timer_canvas.itemconfig(self._timer_canvas_window, width=canvas_width)
+        content_width = self.timer_scroll.winfo_reqwidth()
+        self._timer_canvas.itemconfig(self._timer_canvas_window, width=max(canvas_width, content_width))
 
     def _populate_timer_buttons(self):
         for w in self.timer_scroll.winfo_children():
@@ -1038,11 +1040,11 @@ class App(ctk.CTk):
 
             ctk.CTkLabel(
                 self.timer_scroll, text=group_label,
-                font=ctk.CTkFont(size=14, weight="bold"), anchor="w"
-            ).pack(fill="x", padx=4, pady=(10, 4))
+                font=ctk.CTkFont(size=10, weight="bold"), anchor="w"
+            ).pack(anchor="w", padx=2, pady=(4, 1))
 
             container = ctk.CTkFrame(self.timer_scroll, fg_color="transparent")
-            container.pack(fill="x", padx=4, pady=2)
+            container.pack(anchor="w", padx=2, pady=0)
 
             for p in sorted(projs, key=lambda x: x.name):
                 week_mins = p.minutes_in_range(mon_start, sun_end)
@@ -1055,18 +1057,20 @@ class App(ctk.CTk):
 
                 is_running = (self.running_project and p.name == self.running_project.name)
 
+                time_str = format_hm(week_mins)
                 btn = ctk.CTkButton(
                     container,
-                    text=f"{p.name}\n{format_hm(week_mins)} this week",
-                    width=85, height=26,
+                    text=f"{p.name} ({time_str})",
+                    height=22,
                     font=ctk.CTkFont(size=9),
                     fg_color=COLOR_RUNNING if is_running else COLOR_IDLE,
                     hover_color="#c0392b" if is_running else "#218838",
-                    border_width=2 if is_running else 0,
+                    border_width=1 if is_running else 0,
                     border_color="#ff6b6b" if is_running else None,
+                    corner_radius=4,
                     command=lambda proj=p: self._toggle_timer(proj),
                 )
-                btn.pack(side="left", padx=2, pady=2)
+                btn.pack(side="left", padx=1, pady=1)
                 self.timer_buttons[p.name] = btn
 
     def _toggle_timer(self, project: ProjectNote):
@@ -1113,7 +1117,7 @@ class App(ctk.CTk):
             if ss:
                 week_mins += (datetime.now(timezone.utc) - ss).total_seconds() / 60
             self.timer_buttons[self.running_project.name].configure(
-                text=f"{self.running_project.name}\n{format_hm(week_mins)} this week"
+                text=f"{self.running_project.name} ({format_hm(week_mins)})"
             )
 
     def _status_bar_click(self, event=None):
