@@ -87,7 +87,7 @@ def _generate_clock_ico() -> bytes:
 
 CONFIG_FILE = "timer_config.json"
 DEFAULT_CONFIG = {
-    "vault_path": r"C:\Users\jacob.hand\Documents\My Brain\Work\Projects",
+    "vault_path": r"C:\Users\jacob.hand\OneDrive - Stockport Metropolitan Borough Council\Documents\Jacob Hand SMBC PKM\Slip Box",
     "window_width": 600,
     "window_height": 400,
     "window_x": 100,
@@ -880,10 +880,27 @@ class App(ctk.CTk):
     # ── UI Construction ───────────────────────────────────────────────────
 
     def _build_ui(self):
-        # Tab view — tight padding
+        # Top row: tabs on left, settings+refresh on right
+        top_bar = ctk.CTkFrame(self, fg_color="transparent")
+        top_bar.pack(fill="x", padx=4, pady=(2, 0))
+
+        ctk.CTkButton(
+            top_bar, text="⚙", width=24, height=20,
+            font=ctk.CTkFont(size=9),
+            command=self._open_settings,
+            fg_color="#555555", hover_color="#666666"
+        ).pack(side="right", padx=(2, 0))
+
+        ctk.CTkButton(
+            top_bar, text="🔄", width=24, height=20,
+            font=ctk.CTkFont(size=9),
+            command=self._refresh_projects,
+            fg_color="#555555", hover_color="#666666"
+        ).pack(side="right")
+
+        # Tab view
         self.tabview = ctk.CTkTabview(self, height=28)
         self.tabview.pack(fill="both", expand=True, padx=4, pady=(0, 0))
-        # Reduce internal tab padding
         self.tabview._segmented_button.configure(font=ctk.CTkFont(size=11))
 
         self.tab_timer = self.tabview.add("Timer")
@@ -910,26 +927,9 @@ class App(ctk.CTk):
         self.status_label.bind("<Button-1>", self._status_bar_click)
 
     def _build_timer_tab(self):
-        ctrl = ctk.CTkFrame(self.tab_timer, fg_color="transparent")
-        ctrl.pack(fill="x", padx=2, pady=(0, 2))
-
-        ctk.CTkButton(
-            ctrl, text="🔄", width=28, height=22,
-            font=ctk.CTkFont(size=9),
-            command=self._refresh_projects,
-            fg_color="#555555", hover_color="#666666"
-        ).pack(side="left")
-
-        ctk.CTkButton(
-            ctrl, text="⚙", width=28, height=22,
-            font=ctk.CTkFont(size=9),
-            command=self._open_settings,
-            fg_color="#555555", hover_color="#666666"
-        ).pack(side="right")
-
         # Dual-scroll frame for timer buttons
         timer_outer = ctk.CTkFrame(self.tab_timer, fg_color="transparent")
-        timer_outer.pack(fill="both", expand=True, padx=4, pady=4)
+        timer_outer.pack(fill="both", expand=True, padx=2, pady=2)
 
         self._timer_canvas = tk.Canvas(timer_outer, bg="#2b2b2b", highlightthickness=0)
         timer_v = ctk.CTkScrollbar(timer_outer, command=self._timer_canvas.yview)
