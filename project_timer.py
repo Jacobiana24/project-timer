@@ -710,6 +710,21 @@ class ProjectNote:
         return duration
 
 
+def _quick_has_class_project(filepath: Path) -> bool:
+    """Fast check: read the first 1KB of a file to see if it likely has Class: Project.
+    Avoids full YAML parse for non-project notes."""
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            head = f.read(1024)
+        # Must start with frontmatter delimiter
+        if not head.startswith("---"):
+            return False
+        # Quick substring check for Class field
+        return "Class: Project" in head or 'Class: "Project"' in head or "Class: 'Project'" in head
+    except Exception:
+        return False
+
+
 def scan_projects(vault_path: str) -> list[ProjectNote]:
     projects = []
     vp = Path(vault_path)
@@ -717,6 +732,9 @@ def scan_projects(vault_path: str) -> list[ProjectNote]:
         return projects
     for md in sorted(vp.rglob("*.md")):
         try:
+            # Fast pre-filter — skip files that clearly aren't projects
+            if not _quick_has_class_project(md):
+                continue
             p = ProjectNote(md)
             if p.cls == "Project":
                 projects.append(p)
@@ -1027,11 +1045,25 @@ class App(ctk.CTk):
                 "Vault Not Found",
                 f"Projects folder not found:\n{vault}\n\nUse Settings to set the correct path."
             )
+            return
         self._refresh_projects()
 
     def _refresh_projects(self):
-        vault = self.config["vault_path"]
-        self.projects = scan_projects(vault)
+        """Load projects in a background thread to keep UI responsive."""
+        import threading
+
+        self.status_label.configure(text="Loading projects...", text_color="#ffcc00")
+
+        def _scan():
+            vault = self.config["vault_path"]
+            projects = scan_projects(vault)
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._on_projects_loaded(projects))
+
+        threading.Thread(target=_scan, daemon=True).start()
+
+    def _on_projects_loaded(self, projects: list):
+        self.projects = projects
         self._detect_running_timer()
         self._populate_timer_buttons()
         self._schedule_auto_refresh()
