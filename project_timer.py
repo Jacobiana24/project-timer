@@ -131,6 +131,14 @@ CAL_BORDER = "#444458"
 
 
 def config_path() -> Path:
+    """Return path to config file in user-writable %APPDATA% directory."""
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            d = Path(appdata) / "ProjectTimeTracker"
+            d.mkdir(parents=True, exist_ok=True)
+            return d / CONFIG_FILE
+    # Fallback: next to script/exe
     if getattr(sys, "frozen", False):
         base = Path(sys.executable).parent
     else:
@@ -154,8 +162,13 @@ def load_config() -> dict:
 
 def save_config(cfg: dict):
     try:
-        with open(config_path(), "w", encoding="utf-8") as f:
+        cp = config_path()
+        tmp = cp.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(cp)
     except Exception as e:
         print(f"Warning: could not save config: {e}")
 
@@ -218,11 +231,38 @@ def session_day_local(session: dict) -> datetime | None:
 
 
 def safe_write_frontmatter(filepath: Path, post: frontmatter.Post):
+    """Write frontmatter safely via tmp + rename, with file locking and fsync."""
     tmp = filepath.with_suffix(".tmp")
+    lock = filepath.with_suffix(".lock")
     content = frontmatter.dumps(post)
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(content)
-    tmp.replace(filepath)
+
+    # Acquire lock to prevent concurrent writes from multiple instances
+    lock_fd = None
+    try:
+        lock_fd = open(lock, "w")
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        import time
+        time.sleep(0.2)
+
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(filepath)
+    finally:
+        if lock_fd:
+            try:
+                lock_fd.close()
+                lock.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 # ─── Calendar Date Picker ─────────────────────────────────────────────────────
@@ -607,7 +647,8 @@ class ProjectNote:
 
     def load(self):
         with open(self.filepath, "r", encoding="utf-8") as f:
-            self.post = frontmatter.load(f)
+            # YAMLHandler uses yaml.safe_load by default — explicit for clarity
+            self.post = frontmatter.load(f, handler=frontmatter.YAMLHandler())
 
     @property
     def meta(self) -> dict:
@@ -686,7 +727,7 @@ class ProjectNote:
             return 0
 
         now = datetime.now(timezone.utc)
-        duration = max(1, round((now - start).total_seconds() / 60))
+        duration = max(1, math.ceil((now - start).total_seconds() / 60))
 
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
         start_iso = self.meta["session_start"]
@@ -711,16 +752,23 @@ class ProjectNote:
 
 
 def _quick_has_class_project(filepath: Path) -> bool:
-    """Fast check: read the first 1KB of a file to see if it likely has Class: Project.
-    Avoids full YAML parse for non-project notes."""
+    """Fast check: read only the YAML frontmatter block (between --- delimiters)
+    to see if it contains Class: Project. Skips files without frontmatter."""
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            head = f.read(1024)
-        # Must start with frontmatter delimiter
-        if not head.startswith("---"):
-            return False
-        # Quick substring check for Class field
-        return "Class: Project" in head or 'Class: "Project"' in head or "Class: 'Project'" in head
+            first_line = f.readline()
+            if not first_line.startswith("---"):
+                return False
+            # Read lines until closing ---
+            header_lines = []
+            for line in f:
+                if line.startswith("---"):
+                    break
+                header_lines.append(line)
+                if len(header_lines) > 200:  # safety limit
+                    break
+            header = "".join(header_lines)
+        return "Class: Project" in header or 'Class: "Project"' in header or "Class: 'Project'" in header
     except Exception:
         return False
 
@@ -832,11 +880,21 @@ def calculate_adjusted_bookings(
                 balanced = False
                 diff = target_daily - day_sum
                 step = 15 if diff > 0 else -15
-                target_row = max(filtered, key=lambda r: r["final_days"][day_idx])
-                target_row["final_days"][day_idx] += step
-                target_row["final_total"] = sum(target_row["final_days"])
+                # Pick the project with the largest value on this day,
+                # but only if subtracting won't make it negative
+                candidates = sorted(filtered, key=lambda r: r["final_days"][day_idx], reverse=True)
+                for target_row in candidates:
+                    if target_row["final_days"][day_idx] + step >= 0:
+                        target_row["final_days"][day_idx] += step
+                        target_row["final_total"] = sum(target_row["final_days"])
+                        break
         if balanced:
             break
+
+    # Final clamp — ensure no day bucket is negative
+    for r in filtered:
+        r["final_days"] = [max(0, d) for d in r["final_days"]]
+        r["final_total"] = sum(r["final_days"])
 
     rows = sorted(filtered, key=lambda r: r["final_total"], reverse=True)
     result_rows = []
