@@ -921,6 +921,8 @@ def calculate_adjusted_bookings(
 
 class App(ctk.CTk):
     def __init__(self):
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
         super().__init__()
 
         self.config = load_config()
@@ -929,8 +931,6 @@ class App(ctk.CTk):
             f"{self.config['window_width']}x{self.config['window_height']}"
             f"+{self.config['window_x']}+{self.config['window_y']}"
         )
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
 
         # Set clock icon
         try:
